@@ -57,6 +57,10 @@ class SyncService {
       _clipboardHistoryController.stream;
   Stream<bool> get onSyncStateChanged => _syncStateController.stream;
 
+  Stream<bool> get onRelayConnectionChanged =>
+      _relayService.onConnectionChanged;
+  Stream<String> get onRelayError => _relayService.onError;
+
   ConnectionStatus _currentStatus = ConnectionStatus.disconnected;
 
   ConnectionStatus get currentStatus => _currentStatus;
@@ -335,7 +339,7 @@ class SyncService {
     // Handle relay peer disconnect
   }
 
-  Future<void> connectRelay(String relayUrl) async {
+  Future<bool> connectRelay(String relayUrl) async {
     if (!_isInitialized) {
       if (_initCompleter != null) {
         await _initCompleter!.future;
@@ -347,7 +351,7 @@ class SyncService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('relay_url', relayUrl);
 
-    await _relayService.connect(
+    return await _relayService.connect(
       relayUrl: relayUrl,
       deviceId: _deviceId!,
       deviceName: _deviceName!,

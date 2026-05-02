@@ -16,11 +16,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _relayController = TextEditingController();
   bool _isLoading = true;
   bool _isRelayConnected = false;
+  bool _isConnecting = false;
+  StreamSubscription? _relayConnSub;
+  StreamSubscription? _relayErrorSub;
 
   @override
   void initState() {
     super.initState();
     _loadSettings();
+    // 监听中继连接状态变化
+    _relayConnSub = widget.syncService.onRelayConnectionChanged.listen((connected) {
+      if (mounted) setState(() => _isRelayConnected = connected);
+    });
+    // 监听中继错误信息
+    _relayErrorSub = widget.syncService.onRelayError.listen((error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error), backgroundColor: Colors.red),
+        );
+      }
+    });
   }
 
   Future<void> _loadSettings() async {
@@ -39,6 +54,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _nameController.dispose();
     _relayController.dispose();
+    _relayConnSub?.cancel();
+    _relayErrorSub?.cancel();
     super.dispose();
   }
 
@@ -134,9 +151,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           children: [
                             Expanded(
                               child: FilledButton.icon(
-                                icon: const Icon(Icons.link),
-                                label: const Text('连接中继'),
-                                onPressed: _connectRelay,
+                                icon: _isConnecting
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Icon(Icons.link),
+                                label: Text(_isConnecting ? '连接中...' : '连接中继'),
+                                onPressed: _isConnecting ? null : _connectRelay,
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -215,20 +241,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
 
+    setState(() => _isConnecting = true);
+
     try {
-      await widget.syncService.connectRelay(url);
+      final connected = await widget.syncService
+          .connectRelay(url)
+          .timeout(const Duration(seconds: 25));
       if (mounted) {
-        setState(() => _isRelayConnected = true);
+        if (connected) {
+          setState(() => _isRelayConnected = true);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('已连接中继服务器')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('连接失败，请检查地址和网络'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } on TimeoutException {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已连接中继服务器')),
+          const SnackBar(
+            content: Text('连接超时，服务器无响应，请检查地址是否正确'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('连接失败: $e')),
+          SnackBar(
+            content: Text('连接出错: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _isConnecting = false);
     }
   }
 
