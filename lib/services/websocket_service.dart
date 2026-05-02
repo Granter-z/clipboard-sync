@@ -46,16 +46,18 @@ class WebSocketService {
 
     try {
       _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
-      await for (final request in _server!) {
+      // 不 await 整个循环，让它在后台运行
+      _server!.listen((request) {
         if (request.uri.path == AppConstants.wsPath) {
           try {
-            final ws = await WebSocketTransformer.upgrade(request);
-            _handleConnection(ws);
+            WebSocketTransformer.upgrade(request).then((ws) {
+              _handleConnection(ws);
+            });
           } catch (e) {
             // Upgrade failed
           }
         }
-      }
+      });
     } catch (e) {
       _isServerRunning = false;
     }

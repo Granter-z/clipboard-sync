@@ -6,6 +6,7 @@
 #include <flutter/standard_method_codec.h>
 #include <string>
 #include <memory>
+#include <chrono>
 
 class ClipboardMonitor {
 public:
@@ -27,6 +28,11 @@ private:
     bool isMonitoring_;
     bool gdiplusInitialized_;
     std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
+
+    // Dedup state
+    std::string lastText_;
+    std::string lastImage_;
+    std::chrono::steady_clock::time_point lastEventTime_;
 
     void OnClipboardChange();
     std::string GetClipboardText();

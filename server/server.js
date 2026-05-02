@@ -13,6 +13,17 @@ const deviceRegistry = new Map();
 
 function createServer() {
   const server = http.createServer((req, res) => {
+    // CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(200);
+      res.end();
+      return;
+    }
+
     // Health check endpoint
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -23,11 +34,37 @@ function createServer() {
       }));
       return;
     }
+
+    // HTTP POST endpoint for sending clipboard data (used by Android background service)
+    if (req.method === 'POST' && req.url === '/send') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const message = JSON.parse(body);
+          const senderId = message.senderId;
+          if (senderId && message.type === 'clipboard_sync') {
+            broadcastToAll(senderId, message);
+            console.log(`[HTTP→] ${senderId}: ${message.payload?.contentType || 'unknown'}`);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'invalid message' }));
+          }
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
+
     // Status page
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(`<h1>Clipboard Sync Relay</h1>
 <p>Connected devices: ${clients.size}</p>
-<ul>${Array.from(deviceRegistry.entries()).map(([id, info]) => 
+<ul>${Array.from(deviceRegistry.entries()).map(([id, info]) =>
   `<li>${info.name} (${info.platform}) - ${info.since}</li>`
 ).join('')}</ul>`);
   });

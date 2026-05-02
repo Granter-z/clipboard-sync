@@ -52,6 +52,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    // 退出时自动保存设备名称
+    final name = _nameController.text.trim();
+    if (name.isNotEmpty) {
+      widget.syncService.setDeviceName(name);
+    }
     _nameController.dispose();
     _relayController.dispose();
     _relayConnSub?.cancel();

@@ -67,54 +67,9 @@ class RelayService {
     try {
       final uri = Uri.parse(_relayUrl!);
 
-      // 先做健康检查，验证手机能否访问服务器
-      final healthScheme = uri.scheme == 'wss' ? 'https' : 'http';
-      final healthHost = uri.host;
-      final healthPort = uri.hasPort ? ':${uri.port}' : '';
-      final healthUri = Uri.parse('$healthScheme://$healthHost$healthPort/health');
-      try {
-        final healthClient = HttpClient();
-        healthClient.badCertificateCallback = (_, _, _) => true;
-        healthClient.connectionTimeout = const Duration(seconds: 10);
-        final healthReq = await healthClient.getUrl(healthUri);
-        final healthResp = await healthReq.close();
-        if (healthResp.statusCode != 200) {
-          _errorController.add('服务器异常 (HTTP ${healthResp.statusCode})');
-          healthClient.close();
-          _scheduleReconnect();
-          return false;
-        }
-        healthClient.close();
-      } on SocketException catch (e) {
-        _errorController.add('网络不可达: ${e.message}');
-        _scheduleReconnect();
-        return false;
-      } on TimeoutException {
-        _errorController.add('健康检查超时，请检查手机是否能访问该地址');
-        _scheduleReconnect();
-        return false;
-      } catch (e) {
-        _errorController.add('健康检查异常: $e');
-        _scheduleReconnect();
-        return false;
-      }
-
-      // 健康检查通过，尝试 WebSocket 连接（先用自定义 HttpClient，失败则回退）
-      try {
-        final httpClient = HttpClient();
-        httpClient.badCertificateCallback =
-            (X509Certificate cert, String host, int port) => true;
-        httpClient.connectionTimeout = const Duration(seconds: 15);
-        _ws = await WebSocket.connect(
-          uri.toString(),
-          customClient: httpClient,
-        ).timeout(const Duration(seconds: 20));
-      } catch (_) {
-        // 回退到默认 WebSocket.connect
-        _ws = await WebSocket.connect(
-          uri.toString(),
-        ).timeout(const Duration(seconds: 20));
-      }
+      _ws = await WebSocket.connect(
+        uri.toString(),
+      ).timeout(const Duration(seconds: 15));
 
       _isConnected = true;
       _connectionController.add(true);
@@ -183,11 +138,22 @@ class RelayService {
       );
 
       return true;
+    } on TimeoutException {
+      _isConnected = false;
+      _connectionController.add(false);
+      _errorController.add('连接超时');
+      _scheduleReconnect();
+      return false;
+    } on SocketException catch (e) {
+      _isConnected = false;
+      _connectionController.add(false);
+      _errorController.add('网络不可达: ${e.message}');
+      _scheduleReconnect();
+      return false;
     } catch (e) {
       _isConnected = false;
       _connectionController.add(false);
-      final errorMsg = '连接失败: $e';
-      _errorController.add(errorMsg);
+      _errorController.add('连接失败: $e');
       _scheduleReconnect();
       return false;
     }

@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/constants.dart';
 import '../models/device_info_model.dart';
 
 class DiscoveryService {
   final Map<String, DiscoveredDevice> _discoveredDevices = {};
+
+  static const _channel = MethodChannel('com.clipsync/clipboard');
 
   RawDatagramSocket? _listenSocket;
   RawDatagramSocket? _broadcastSocket;
@@ -46,6 +49,13 @@ class DiscoveryService {
       await prefs.setString('device_id', deviceId);
     }
 
+    // Acquire multicast lock on Android to receive UDP broadcasts
+    if (Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('acquireMulticastLock');
+      } catch (_) {}
+    }
+
     // Start listening for discovery broadcasts
     try {
       _listenSocket = await RawDatagramSocket.bind(
@@ -70,9 +80,10 @@ class DiscoveryService {
     try {
       _broadcastSocket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
-        0, // ephemeral port
+        0,
         reuseAddress: true,
       );
+      _broadcastSocket!.broadcastEnabled = true;
     } catch (e) {
       // Broadcast socket failed, but listen socket may still work
     }
@@ -127,19 +138,53 @@ class DiscoveryService {
 
     try {
       final data = utf8.encode(message);
-      _broadcastSocket!.send(
-        data,
-        InternetAddress('255.255.255.255'),
-        _discoveryPort,
-      );
+      // Broadcast to subnet-specific address and global broadcast
+      _broadcastSocket!.send(data, InternetAddress('255.255.255.255'), _discoveryPort);
+      // Also try common subnet broadcast addresses
+      _getSubnetBroadcasts().then((addresses) {
+        for (final addr in addresses) {
+          try {
+            _broadcastSocket!.send(data, addr, _discoveryPort);
+          } catch (_) {}
+        }
+      });
     } catch (_) {
       // Broadcast failed
     }
   }
 
+  Future<List<InternetAddress>> _getSubnetBroadcasts() async {
+    final addresses = <InternetAddress>[];
+    try {
+      for (final interface in await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLinkLocal: false,
+      )) {
+        for (final addr in interface.addresses) {
+          // Calculate subnet broadcast address
+          final parts = addr.address.split('.');
+          if (parts.length == 4) {
+            // Assume /24 subnet for simplicity
+            final broadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+            addresses.add(InternetAddress(broadcast));
+          }
+        }
+      }
+    } catch (_) {}
+    return addresses;
+  }
+
   Future<void> stop() async {
     if (!_isRunning) return;
     _isRunning = false;
+
+    // Release multicast lock on Android
+    if (Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('releaseMulticastLock');
+      } catch (_) {}
+    }
+
     _broadcastTimer?.cancel();
     _broadcastTimer = null;
     _broadcastSocket?.close();

@@ -57,9 +57,9 @@ ClipboardMonitor::ClipboardMonitor(flutter::BinaryMessenger* messenger)
     RegisterClass(&wc);
 
     hwnd_ = CreateWindowEx(
-        0, L"ClipboardMonitorWindow", L"ClipboardMonitor",
-        0, 0, 0, 0, 0,
-        HWND_MESSAGE, nullptr, GetModuleHandle(nullptr), this);
+        WS_EX_TOOLWINDOW, L"ClipboardMonitorWindow", L"ClipboardMonitor",
+        WS_POPUP, 0, 0, 0, 0,
+        nullptr, nullptr, GetModuleHandle(nullptr), this);
 
     if (hwnd_) {
         SetWindowLongPtr(hwnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
@@ -113,25 +113,45 @@ LRESULT CALLBACK ClipboardMonitor::WndProc(HWND hwnd, UINT msg, WPARAM wParam, L
 void ClipboardMonitor::OnClipboardChange() {
     if (!isMonitoring_) return;
 
-    if (HasClipboardImage()) {
-        auto base64Image = GetClipboardImageAsBase64();
-        if (!base64Image.empty()) {
-            flutter::EncodableMap event;
-            event[flutter::EncodableValue("type")] = flutter::EncodableValue("image");
-            event[flutter::EncodableValue("data")] = flutter::EncodableValue(base64Image);
-            channel_->InvokeMethod("onClipboardChanged",
-                std::make_unique<flutter::EncodableValue>(event));
+    // Debounce: ignore events within 100ms of the last one
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastEventTime_).count();
+    if (elapsed < 100) return;
+
+    // Retry reading clipboard - OpenClipboard can fail if another process holds the lock
+    for (int retry = 0; retry < 5; retry++) {
+        if (HasClipboardImage()) {
+            auto base64Image = GetClipboardImageAsBase64();
+            if (!base64Image.empty() && base64Image != lastImage_) {
+                lastImage_ = base64Image;
+                lastText_.clear();
+                lastEventTime_ = now;
+                flutter::EncodableMap event;
+                event[flutter::EncodableValue("type")] = flutter::EncodableValue("image");
+                event[flutter::EncodableValue("data")] = flutter::EncodableValue(base64Image);
+                channel_->InvokeMethod("onClipboardChanged",
+                    std::make_unique<flutter::EncodableValue>(event));
+                return;
+            }
+            if (!base64Image.empty()) return; // Same image, skip
         }
-    }
-    else {
-        auto text = GetClipboardText();
-        if (!text.empty()) {
-            flutter::EncodableMap event;
-            event[flutter::EncodableValue("type")] = flutter::EncodableValue("text");
-            event[flutter::EncodableValue("data")] = flutter::EncodableValue(text);
-            channel_->InvokeMethod("onClipboardChanged",
-                std::make_unique<flutter::EncodableValue>(event));
+        else {
+            auto text = GetClipboardText();
+            if (!text.empty() && text != lastText_) {
+                lastText_ = text;
+                lastImage_.clear();
+                lastEventTime_ = now;
+                flutter::EncodableMap event;
+                event[flutter::EncodableValue("type")] = flutter::EncodableValue("text");
+                event[flutter::EncodableValue("data")] = flutter::EncodableValue(text);
+                channel_->InvokeMethod("onClipboardChanged",
+                    std::make_unique<flutter::EncodableValue>(event));
+                return;
+            }
+            if (!text.empty()) return; // Same text, skip
         }
+        // Clipboard read failed (likely locked), wait and retry
+        Sleep(10);
     }
 }
 

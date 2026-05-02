@@ -83,11 +83,14 @@ class ImageProcessor {
 }
 
 class ClipboardServiceAndroid implements ClipboardService {
-  static final ClipboardServiceAndroid _instance = ClipboardServiceAndroid._();
-  factory ClipboardServiceAndroid._() => _instance;
+  static ClipboardServiceAndroid? _instance;
+  factory ClipboardServiceAndroid._() {
+    _instance ??= ClipboardServiceAndroid._internal();
+    return _instance!;
+  }
+  ClipboardServiceAndroid._internal();
 
   static const _channel = MethodChannel(AppConstants.channelName);
-  static const _eventChannel = EventChannel(AppConstants.eventChannelName);
 
   @override
   Future<String?> readText() async {
@@ -128,25 +131,27 @@ class ClipboardServiceAndroid implements ClipboardService {
     }
   }
 
+  // Not used - Service sends directly to relay server
   @override
-  Stream<ClipboardChangeEvent> get clipboardChanges {
-    return _eventChannel.receiveBroadcastStream().map((event) {
-      final map = event as Map<dynamic, dynamic>;
-      return ClipboardChangeEvent(
-        type: map['type'] as String,
-        data: map['data'] as String,
-      );
-    });
-  }
+  Stream<ClipboardChangeEvent> get clipboardChanges =>
+      const Stream.empty();
 
   @override
   Future<void> startMonitoring() async {
-    await _channel.invokeMethod('startMonitoring');
+    try {
+      await _channel.invokeMethod('startMonitoring');
+    } catch (e) {
+      // ignore
+    }
   }
 
   @override
   Future<void> stopMonitoring() async {
-    await _channel.invokeMethod('stopMonitoring');
+    try {
+      await _channel.invokeMethod('stopMonitoring');
+    } catch (e) {
+      // ignore
+    }
   }
 }
 

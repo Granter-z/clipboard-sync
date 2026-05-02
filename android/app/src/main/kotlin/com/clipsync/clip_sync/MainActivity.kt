@@ -3,27 +3,24 @@ package com.clipsync.clip_sync
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.util.Base64
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.clipsync/clipboard"
-    private val EVENT_CHANNEL = "com.clipsync/clipboard/events"
 
     private var clipboardManager: ClipboardManager? = null
-    private var clipboardListener: ClipboardManager.OnPrimaryClipChangedListener? = null
-    private var eventSink: EventChannel.EventSink? = null
-    private var lastClipboardText: String? = null
-    private var suppressNextEvent = false
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -56,86 +53,49 @@ class MainActivity : FlutterActivity() {
                         stopClipboardMonitoring()
                         result.success(true)
                     }
+                    "acquireMulticastLock" -> {
+                        acquireMulticastLock()
+                        result.success(true)
+                    }
+                    "releaseMulticastLock" -> {
+                        releaseMulticastLock()
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }
-
-        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
-            .setStreamHandler(object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
-                    eventSink = events
-                }
-
-                override fun onCancel(arguments: Any?) {
-                    eventSink = null
-                }
-            })
     }
 
     private fun startClipboardMonitoring() {
-        if (clipboardListener != null) return
-
-        clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
-            try {
-                if (suppressNextEvent) {
-                    suppressNextEvent = false
-                    return@OnPrimaryClipChangedListener
-                }
-
-                val clipData = clipboardManager?.primaryClip ?: return@OnPrimaryClipChangedListener
-                val item = clipData.getItemAt(0) ?: return@OnPrimaryClipChangedListener
-
-                if (item.text != null) {
-                    val text = item.text.toString()
-                    if (text != lastClipboardText) {
-                        lastClipboardText = text
-                        eventSink?.success(mapOf(
-                            "type" to "text",
-                            "data" to text
-                        ))
-                    }
-                } else if (item.uri != null) {
-                    try {
-                        val bitmap = contentResolver.openInputStream(item.uri)?.use { stream ->
-                            BitmapFactory.decodeStream(stream)
-                        }
-                        if (bitmap != null) {
-                            val stream = ByteArrayOutputStream()
-                            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-                            val byteArray = stream.toByteArray()
-                            val base64 = Base64.encodeToString(byteArray, Base64.NO_WRAP)
-                            bitmap.recycle()
-                            eventSink?.success(mapOf(
-                                "type" to "image",
-                                "data" to base64
-                            ))
-                        }
-                    } catch (e: Exception) {
-                        // Error decoding image from URI
-                    }
-                }
-            } catch (e: Exception) {
-                // Clipboard monitoring error
-            }
-        }
-
-        clipboardListener?.let { listener ->
-            clipboardManager?.addPrimaryClipChangedListener(listener)
-        }
+        val serviceIntent = Intent(this, ClipboardService::class.java)
+        startForegroundService(serviceIntent)
     }
 
     private fun stopClipboardMonitoring() {
-        clipboardListener?.let { listener ->
-            clipboardManager?.removePrimaryClipChangedListener(listener)
-        }
-        clipboardListener = null
+        stopService(Intent(this, ClipboardService::class.java))
+    }
+
+    private fun acquireMulticastLock() {
+        if (multicastLock != null) return
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        multicastLock = wifiManager.createMulticastLock("clipSyncDiscovery")
+        multicastLock?.setReferenceCounted(true)
+        multicastLock?.acquire()
+    }
+
+    private fun releaseMulticastLock() {
+        multicastLock?.release()
+        multicastLock = null
     }
 
     private fun writeToClipboard(text: String) {
-        lastClipboardText = text
-        suppressNextEvent = true
+        ClipboardService.suppressNextEvent = true
+        ClipboardService.lastClipboardText = text.trim()
         val clipData = ClipData.newPlainText("clip_sync", text)
         clipboardManager?.setPrimaryClip(clipData)
+        android.os.Handler(mainLooper).postDelayed({
+            ClipboardService.suppressNextEvent = false
+        }, 2000)
     }
 
     private fun readFromClipboard(): String? {
@@ -183,9 +143,12 @@ class MainActivity : FlutterActivity() {
             val authority = "${packageName}.fileprovider"
             val contentUri: Uri = FileProvider.getUriForFile(this, authority, imageFile)
 
-            suppressNextEvent = true
+            ClipboardService.suppressNextEvent = true
             val clipData = ClipData.newUri(contentResolver, "clip_sync_image", contentUri)
             clipboardManager?.setPrimaryClip(clipData)
+            android.os.Handler(mainLooper).postDelayed({
+                ClipboardService.suppressNextEvent = false
+            }, 2000)
         } catch (e: Exception) {
             // Error writing image to clipboard
         }

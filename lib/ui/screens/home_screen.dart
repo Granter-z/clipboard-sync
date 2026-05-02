@@ -35,8 +35,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _init() async {
-    await widget.syncService.initialize();
-    await widget.syncService.startSync();
+    try {
+      await widget.syncService.initialize();
+      await widget.syncService.startSync();
+    } catch (e) {
+      // Init failed
+    }
 
     _statusSub = widget.syncService.onConnectionStatusChanged.listen((status) {
       if (mounted) setState(() => _connectionStatus = status);

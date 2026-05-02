@@ -100,12 +100,8 @@ class SyncService {
     _discoveryService.onDeviceRemoved.listen(_onDeviceRemoved);
 
     // Listen for relay peers
-    _relayService.onPeerJoined.listen((peer) {
-      _onRelayPeerJoined(peer);
-    });
-    _relayService.onPeerLeft.listen((deviceId) {
-      _onRelayPeerLeft(deviceId);
-    });
+    _relayService.onPeerJoined.listen(_onRelayPeerJoined);
+    _relayService.onPeerLeft.listen(_onRelayPeerLeft);
     _relayService.onMessage.listen((entry) {
       _onMessageFromPeer(entry.key, entry.value);
     });
@@ -148,6 +144,12 @@ class SyncService {
     // Start clipboard monitoring
     await _clipboardService.startMonitoring();
 
+    // Auto-connect to relay if URL was previously saved
+    final savedRelayUrl = await getRelayUrl();
+    if (savedRelayUrl != null && savedRelayUrl.isNotEmpty) {
+      connectRelay(savedRelayUrl);
+    }
+
     _isSyncing = true;
     _syncStateController.add(true);
   }
@@ -168,13 +170,6 @@ class SyncService {
     if (_isOwnWrite) return;
 
     final contentHash = sha256.convert(utf8.encode(event.data)).toString();
-    if (_recentHashes.contains(contentHash)) return;
-
-    _recentHashes.add(contentHash);
-    if (_recentHashes.length > AppConstants.maxRecentHashes) {
-      final first = _recentHashes.first;
-      _recentHashes.remove(first);
-    }
 
     _sequence++;
 
@@ -306,23 +301,52 @@ class SyncService {
     });
   }
 
+  final Set<String> _connectingPeers = {};
+
   void _onDeviceDiscovered(DiscoveredDevice device) {
     final existingIndex = _knownDevices.indexWhere((d) => d.id == device.id);
     if (existingIndex >= 0) {
       _knownDevices[existingIndex] = device;
     } else {
       _knownDevices.add(device);
-
-      // Auto-connect to newly discovered device
-      final handshakeMsg = SyncMessage.handshake(
-        deviceId: _deviceId!,
-        deviceName: _deviceName!,
-        platform: _platform,
-      );
-      _webSocketService.connectToPeer(device.host, device.port,
-          handshakeMsg: handshakeMsg);
+      _connectToDiscoveredDevice(device);
     }
     _devicesController.add(List.from(_knownDevices));
+  }
+
+  void _connectToDiscoveredDevice(DiscoveredDevice device) {
+    // Only one side should initiate connection (lower ID connects to higher ID)
+    if (_connectingPeers.contains(device.id)) return;
+    if (_webSocketService.connectedPeers.containsKey(device.id)) return;
+
+    _connectingPeers.add(device.id);
+    _doConnectWithRetry(device, retries: 5);
+  }
+
+  Future<void> _doConnectWithRetry(DiscoveredDevice device, {int retries = 5}) async {
+    final handshakeMsg = SyncMessage.handshake(
+      deviceId: _deviceId!,
+      deviceName: _deviceName!,
+      platform: _platform,
+    );
+
+    for (int i = 0; i < retries; i++) {
+      if (_webSocketService.connectedPeers.containsKey(device.id)) {
+        break; // Already connected
+      }
+
+      await _webSocketService.connectToPeer(device.host, device.port,
+          handshakeMsg: handshakeMsg);
+
+      if (_webSocketService.connectedPeers.containsKey(device.id)) {
+        break; // Connected successfully
+      }
+
+      // Wait before retry
+      await Future.delayed(Duration(seconds: 2 + i));
+    }
+
+    _connectingPeers.remove(device.id);
   }
 
   void _onDeviceRemoved(String deviceId) {
