@@ -36,6 +36,7 @@ class SyncService {
 
   // State
   bool _isInitialized = false;
+  Completer<void>? _initCompleter;
   bool _isSyncing = true;
   final List<DiscoveredDevice> _knownDevices = [];
 
@@ -65,7 +66,8 @@ class SyncService {
 
   Future<void> initialize() async {
     if (_isInitialized) return;
-    _isInitialized = true;
+    if (_initCompleter != null) return _initCompleter!.future;
+    _initCompleter = Completer<void>();
 
     _uuid = const Uuid();
     _clipboardService = ClipboardService();
@@ -108,6 +110,9 @@ class SyncService {
         _updateConnectionStatus(ConnectionStatus.connected);
       }
     });
+
+    _isInitialized = true;
+    _initCompleter!.complete();
   }
 
   Future<void> startSync() async {
@@ -331,7 +336,13 @@ class SyncService {
   }
 
   Future<void> connectRelay(String relayUrl) async {
-    if (!_isInitialized) await initialize();
+    if (!_isInitialized) {
+      if (_initCompleter != null) {
+        await _initCompleter!.future;
+      } else {
+        await initialize();
+      }
+    }
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('relay_url', relayUrl);
