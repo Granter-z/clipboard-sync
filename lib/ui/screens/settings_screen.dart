@@ -116,7 +116,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         TextField(
                           controller: _relayController,
                           decoration: const InputDecoration(
-                            hintText: 'wss://your-app.up.railway.app',
+                            hintText: 'wss://clipboard-sync-production-f31f.up.railway.app',
                             border: OutlineInputBorder(),
                             prefixIcon: Icon(Icons.cloud),
                           ),
