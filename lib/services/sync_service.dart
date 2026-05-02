@@ -331,6 +331,8 @@ class SyncService {
   }
 
   Future<void> connectRelay(String relayUrl) async {
+    if (!_isInitialized) await initialize();
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('relay_url', relayUrl);
 

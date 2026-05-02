@@ -157,7 +157,8 @@ std::string ClipboardMonitor::GetClipboardText() {
 
 bool ClipboardMonitor::HasClipboardImage() {
     if (!OpenClipboard(hwnd_)) return false;
-    bool hasImage = IsClipboardFormatAvailable(CF_PNG) ||
+    UINT pngFormat = RegisterClipboardFormatA("PNG");
+    bool hasImage = (pngFormat && IsClipboardFormatAvailable(pngFormat)) ||
                     IsClipboardFormatAvailable(CF_DIB) ||
                     IsClipboardFormatAvailable(CF_BITMAP);
     CloseClipboard();
@@ -188,11 +189,11 @@ std::string ClipboardMonitor::GetClipboardImageAsBase64() {
             SIZE_T dataSize = GlobalSize(hData);
 
             if (isPng) {
-                int b64Size = ((dataSize + 2) / 3) * 4;
+                size_t b64Size = ((dataSize + 2) / 3) * 4;
                 result.resize(b64Size);
                 const char* b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-                int i = 0, j = 0;
-                while (i < (int)dataSize) {
+                size_t i = 0, j = 0;
+                while (i < dataSize) {
                     unsigned char b0 = pData[i++];
                     unsigned char b1 = (i < (int)dataSize) ? pData[i++] : 0;
                     unsigned char b2 = (i < (int)dataSize) ? pData[i++] : 0;
@@ -307,13 +308,13 @@ void ClipboardMonitor::SetClipboardImageInternal(const std::string& base64Data) 
 
     std::vector<BYTE> pngBytes;
     const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    int inputLen = static_cast<int>(base64Data.length());
-    int i = 0;
+    size_t inputLen = base64Data.length();
+    size_t i = 0;
     while (i < inputLen) {
-        int a = chars.find(base64Data[i++]);
-        int b = (i < inputLen) ? chars.find(base64Data[i++]) : 0;
-        int c = (i < inputLen) ? chars.find(base64Data[i++]) : 0;
-        int d = (i < inputLen) ? chars.find(base64Data[i++]) : 0;
+        size_t a = chars.find(base64Data[i++]);
+        size_t b = (i < inputLen) ? chars.find(base64Data[i++]) : 0;
+        size_t c = (i < inputLen) ? chars.find(base64Data[i++]) : 0;
+        size_t d = (i < inputLen) ? chars.find(base64Data[i++]) : 0;
         if (a == std::string::npos) a = 0;
         if (b == std::string::npos) b = 0;
         if (c == std::string::npos) c = 0;
