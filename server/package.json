@@ -1,0 +1,12 @@
+{
+  "name": "clipboard-sync-relay",
+  "version": "1.0.0",
+  "description": "WebSocket relay server for Clipboard Sync",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

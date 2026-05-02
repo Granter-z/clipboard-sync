@@ -1,0 +1,11 @@
+{
+  "name": "clipboard-sync-relay",
+  "description": "Clipboard Sync Relay Server",
+  "repository": "",
+  "env": {
+    "PORT": {
+      "description": "WebSocket server port",
+      "value": "9877"
+    }
+  }
+}
