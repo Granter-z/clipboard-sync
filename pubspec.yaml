@@ -11,9 +11,6 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
 
-  # State Management
-  provider: ^6.1.5
-
   # Networking
   multicast_dns: ^0.3.3
   web_socket_channel: ^3.0.3

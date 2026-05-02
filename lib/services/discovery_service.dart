@@ -12,6 +12,7 @@ class DiscoveryService {
   RawDatagramSocket? _broadcastSocket;
   String? _deviceName;
   String? _deviceId;
+  String _platform = 'unknown';
   bool _isRunning = false;
   Timer? _broadcastTimer;
 
@@ -31,11 +32,13 @@ class DiscoveryService {
   Future<void> start({
     required String deviceName,
     required String deviceId,
+    String platform = 'unknown',
   }) async {
     if (_isRunning) return;
     _isRunning = true;
     _deviceName = deviceName;
     _deviceId = deviceId;
+    _platform = platform;
 
     final prefs = await SharedPreferences.getInstance();
     final storedId = prefs.getString('device_id');
@@ -118,6 +121,7 @@ class DiscoveryService {
       'id': _deviceId,
       'name': _deviceName,
       'port': AppConstants.wsPort,
+      'platform': _platform,
       'version': 1,
     });
 

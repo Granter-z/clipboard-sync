@@ -119,6 +119,7 @@ class SyncService {
     await _discoveryService.start(
       deviceName: _deviceName!,
       deviceId: _deviceId!,
+      platform: _platform,
     );
 
     // Start WebSocket server

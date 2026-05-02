@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import '../core/constants.dart';
 import '../models/clipboard_item.dart';
@@ -36,12 +38,12 @@ class ImageProcessor {
           data: base64Data,
           encoding: 'base64',
           size: base64Data.length,
-          hash: _simpleHash(base64Data),
+          hash: _hashData(base64Data),
         ),
       ];
     }
 
-    final chunkId = _simpleHash(base64Data);
+    final chunkId = _hashData(base64Data);
     final totalChunks = (base64Data.length / chunkSize).ceil();
     final payloads = <Payload>[];
 
@@ -73,12 +75,13 @@ class ImageProcessor {
     return chunks.map((c) => c.data).join();
   }
 
-  static String _simpleHash(String input) {
-    return base64Encode(utf8.encode(input));
+  static String _hashData(String input) {
+    final bytes = utf8.encode(input);
+    final digest = sha256.convert(bytes);
+    return digest.toString().substring(0, 16);
   }
 }
 
-// Android Clipboard Service
 class ClipboardServiceAndroid implements ClipboardService {
   static final ClipboardServiceAndroid _instance = ClipboardServiceAndroid._();
   factory ClipboardServiceAndroid._() => _instance;
@@ -88,25 +91,41 @@ class ClipboardServiceAndroid implements ClipboardService {
 
   @override
   Future<String?> readText() async {
-    return await _channel.invokeMethod<String>('readText');
+    try {
+      return await _channel.invokeMethod<String>('readText');
+    } catch (e) {
+      return null;
+    }
   }
 
   @override
   Future<void> writeText(String text) async {
-    await _channel.invokeMethod('writeText', {'text': text});
+    try {
+      await _channel.invokeMethod('writeText', {'text': text});
+    } catch (e) {
+      // Write failed
+    }
   }
 
   @override
   Future<Uint8List?> readImage() async {
-    final base64 = await _channel.invokeMethod<String>('readImage');
-    if (base64 == null) return null;
-    return base64Decode(base64);
+    try {
+      final base64 = await _channel.invokeMethod<String>('readImage');
+      if (base64 == null) return null;
+      return base64Decode(base64);
+    } catch (e) {
+      return null;
+    }
   }
 
   @override
   Future<void> writeImage(Uint8List imageBytes) async {
-    final base64 = base64Encode(imageBytes);
-    await _channel.invokeMethod('writeImage', {'data': base64});
+    try {
+      final base64 = base64Encode(imageBytes);
+      await _channel.invokeMethod('writeImage', {'data': base64});
+    } catch (e) {
+      // Write failed
+    }
   }
 
   @override
@@ -131,56 +150,92 @@ class ClipboardServiceAndroid implements ClipboardService {
   }
 }
 
-// Windows Clipboard Service
 class ClipboardServiceWindows implements ClipboardService {
-  static final ClipboardServiceWindows _instance =
-      ClipboardServiceWindows._();
-  factory ClipboardServiceWindows._() => _instance;
+  static ClipboardServiceWindows? _instance;
+  factory ClipboardServiceWindows._() {
+    _instance ??= ClipboardServiceWindows._internal();
+    return _instance!;
+  }
+  ClipboardServiceWindows._internal() {
+    _channel.setMethodCallHandler(_handleMethodCall);
+  }
 
   static const _channel = MethodChannel(AppConstants.channelName);
-  static const _eventChannel = EventChannel(AppConstants.eventChannelName);
+  final StreamController<ClipboardChangeEvent> _eventController =
+      StreamController<ClipboardChangeEvent>.broadcast();
+
+  Future<dynamic> _handleMethodCall(MethodCall call) async {
+    if (call.method == 'onClipboardChanged') {
+      try {
+        final Map<dynamic, dynamic> event =
+            call.arguments as Map<dynamic, dynamic>;
+        _eventController.add(ClipboardChangeEvent(
+          type: event['type'] as String,
+          data: event['data'] as String,
+        ));
+      } catch (e) {
+        // Event parsing failed
+      }
+    }
+  }
 
   @override
   Future<String?> readText() async {
-    return await _channel.invokeMethod<String>('readText');
+    try {
+      return await _channel.invokeMethod<String>('readText');
+    } catch (e) {
+      return null;
+    }
   }
 
   @override
   Future<void> writeText(String text) async {
-    await _channel.invokeMethod('writeText', text);
+    try {
+      await _channel.invokeMethod('writeText', text);
+    } catch (e) {
+      // Write failed
+    }
   }
 
   @override
   Future<Uint8List?> readImage() async {
-    final base64 = await _channel.invokeMethod<String>('readImage');
-    if (base64 == null) return null;
-    return base64Decode(base64);
+    try {
+      final base64 = await _channel.invokeMethod<String>('readImage');
+      if (base64 == null) return null;
+      return base64Decode(base64);
+    } catch (e) {
+      return null;
+    }
   }
 
   @override
   Future<void> writeImage(Uint8List imageBytes) async {
-    final base64 = base64Encode(imageBytes);
-    await _channel.invokeMethod('writeImage', base64);
+    try {
+      final base64 = base64Encode(imageBytes);
+      await _channel.invokeMethod('writeImage', base64);
+    } catch (e) {
+      // Write failed
+    }
   }
 
   @override
-  Stream<ClipboardChangeEvent> get clipboardChanges {
-    return _eventChannel.receiveBroadcastStream().map((event) {
-      final map = event as Map<dynamic, dynamic>;
-      return ClipboardChangeEvent(
-        type: map['type'] as String,
-        data: map['data'] as String,
-      );
-    });
-  }
+  Stream<ClipboardChangeEvent> get clipboardChanges => _eventController.stream;
 
   @override
   Future<void> startMonitoring() async {
-    await _channel.invokeMethod('startMonitoring');
+    try {
+      await _channel.invokeMethod('startMonitoring');
+    } catch (e) {
+      // Start monitoring failed
+    }
   }
 
   @override
   Future<void> stopMonitoring() async {
-    await _channel.invokeMethod('stopMonitoring');
+    try {
+      await _channel.invokeMethod('stopMonitoring');
+    } catch (e) {
+      // Stop monitoring failed
+    }
   }
 }

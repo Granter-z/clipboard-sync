@@ -2,9 +2,15 @@
 #include <shlobj.h>
 #include <algorithm>
 #include <sstream>
+#include <vector>
+#include <gdiplus.h>
+
+#pragma comment(lib, "gdiplus.lib")
+
+static ULONG_PTR g_gdiplusToken = 0;
 
 ClipboardMonitor::ClipboardMonitor(flutter::BinaryMessenger* messenger)
-    : hwnd_(nullptr), nextViewer_(nullptr), isMonitoring_(false) {
+    : hwnd_(nullptr), isMonitoring_(false), gdiplusInitialized_(false) {
 
     channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
         messenger, "com.clipsync/clipboard",
@@ -44,7 +50,6 @@ ClipboardMonitor::ClipboardMonitor(flutter::BinaryMessenger* messenger)
         }
     });
 
-    // Register hidden window class for clipboard monitoring
     WNDCLASS wc = {0};
     wc.lpfnWndProc = ClipboardMonitor::WndProc;
     wc.hInstance = GetModuleHandle(nullptr);
@@ -59,6 +64,11 @@ ClipboardMonitor::ClipboardMonitor(flutter::BinaryMessenger* messenger)
     if (hwnd_) {
         SetWindowLongPtr(hwnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     }
+
+    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+    if (Gdiplus::GdiplusStartup(&g_gdiplusToken, &gdiplusStartupInput, nullptr) == Gdiplus::Ok) {
+        gdiplusInitialized_ = true;
+    }
 }
 
 ClipboardMonitor::~ClipboardMonitor() {
@@ -67,20 +77,22 @@ ClipboardMonitor::~ClipboardMonitor() {
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
     }
+    if (gdiplusInitialized_ && g_gdiplusToken) {
+        Gdiplus::GdiplusShutdown(g_gdiplusToken);
+        g_gdiplusToken = 0;
+        gdiplusInitialized_ = false;
+    }
 }
 
 void ClipboardMonitor::StartMonitoring() {
     if (isMonitoring_ || !hwnd_) return;
-    nextViewer_ = SetClipboardViewer(hwnd_);
+    AddClipboardFormatListener(hwnd_);
     isMonitoring_ = true;
 }
 
 void ClipboardMonitor::StopMonitoring() {
-    if (!isMonitoring_) return;
-    if (hwnd_ && nextViewer_) {
-        ChangeClipboardChain(hwnd_, nextViewer_);
-    }
-    nextViewer_ = nullptr;
+    if (!isMonitoring_ || !hwnd_) return;
+    RemoveClipboardFormatListener(hwnd_);
     isMonitoring_ = false;
 }
 
@@ -88,22 +100,9 @@ LRESULT CALLBACK ClipboardMonitor::WndProc(HWND hwnd, UINT msg, WPARAM wParam, L
     auto* self = reinterpret_cast<ClipboardMonitor*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
 
     switch (msg) {
-        case WM_DRAWCLIPBOARD: {
+        case WM_CLIPBOARDUPDATE: {
             if (self) {
                 self->OnClipboardChange();
-            }
-            // Pass to next viewer
-            if (self && self->nextViewer_) {
-                SendMessage(self->nextViewer_, msg, wParam, lParam);
-            }
-            return 0;
-        }
-        case WM_CHANGECBCHAIN: {
-            if (self && self->nextViewer_ == reinterpret_cast<HWND>(wParam)) {
-                self->nextViewer_ = reinterpret_cast<HWND>(lParam);
-            }
-            else if (self && self->nextViewer_) {
-                SendMessage(self->nextViewer_, msg, wParam, lParam);
             }
             return 0;
         }
@@ -158,8 +157,9 @@ std::string ClipboardMonitor::GetClipboardText() {
 
 bool ClipboardMonitor::HasClipboardImage() {
     if (!OpenClipboard(hwnd_)) return false;
-    bool hasImage = (GetClipboardData(CF_DIB) != nullptr) ||
-                    (GetClipboardData(CF_BITMAP) != nullptr);
+    bool hasImage = IsClipboardFormatAvailable(CF_PNG) ||
+                    IsClipboardFormatAvailable(CF_DIB) ||
+                    IsClipboardFormatAvailable(CF_BITMAP);
     CloseClipboard();
     return hasImage;
 }
@@ -168,31 +168,98 @@ std::string ClipboardMonitor::GetClipboardImageAsBase64() {
     if (!OpenClipboard(hwnd_)) return "";
 
     std::string result;
-    HANDLE hData = GetClipboardData(CF_DIB);
+
+    UINT pngFormat = RegisterClipboardFormatA("PNG");
+    HANDLE hData = nullptr;
+    bool isPng = false;
+
+    if (pngFormat && IsClipboardFormatAvailable(pngFormat)) {
+        hData = GetClipboardData(pngFormat);
+        isPng = true;
+    }
     if (!hData) {
-        hData = GetClipboardData(CF_BITMAP);
+        hData = GetClipboardData(CF_DIB);
+        isPng = false;
     }
 
     if (hData) {
         auto* pData = static_cast<BYTE*>(GlobalLock(hData));
         if (pData) {
             SIZE_T dataSize = GlobalSize(hData);
-            
-            // Convert DIB to PNG in memory using GDI+
-            // For simplicity, just base64 encode the raw DIB data
-            const char* b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-            std::string base64;
-            int i = 0;
-            while (i < (int)dataSize) {
-                unsigned char b0 = pData[i++];
-                unsigned char b1 = (i < (int)dataSize) ? pData[i++] : 0;
-                unsigned char b2 = (i < (int)dataSize) ? pData[i++] : 0;
-                base64 += b64chars[b0 >> 2];
-                base64 += b64chars[((b0 & 0x03) << 4) | (b1 >> 4)];
-                base64 += (i - 1 < (int)dataSize) ? b64chars[((b1 & 0x0F) << 2) | (b2 >> 6)] : '=';
-                base64 += (i < (int)dataSize) ? b64chars[b2 & 0x3F] : '=';
+
+            if (isPng) {
+                int b64Size = ((dataSize + 2) / 3) * 4;
+                result.resize(b64Size);
+                const char* b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                int i = 0, j = 0;
+                while (i < (int)dataSize) {
+                    unsigned char b0 = pData[i++];
+                    unsigned char b1 = (i < (int)dataSize) ? pData[i++] : 0;
+                    unsigned char b2 = (i < (int)dataSize) ? pData[i++] : 0;
+                    result[j++] = b64chars[b0 >> 2];
+                    result[j++] = b64chars[((b0 & 0x03) << 4) | (b1 >> 4)];
+                    result[j++] = (i - 1 < (int)dataSize) ? b64chars[((b1 & 0x0F) << 2) | (b2 >> 6)] : '=';
+                    result[j++] = (i < (int)dataSize) ? b64chars[b2 & 0x3F] : '=';
+                }
+            } else if (gdiplusInitialized_) {
+                BITMAPINFOHEADER* bih = reinterpret_cast<BITMAPINFOHEADER*>(pData);
+                int width = bih->biWidth;
+                int height = abs(bih->biHeight);
+                int bpp = bih->biBitCount;
+
+                Gdiplus::PixelFormat pf;
+                switch (bpp) {
+                    case 32: pf = PixelFormat32bppARGB; break;
+                    case 24: pf = PixelFormat24bppRGB; break;
+                    default: pf = PixelFormat32bppARGB; break;
+                }
+
+                Gdiplus::Bitmap bmp(width, height, pf);
+                Gdiplus::Rect rect(0, 0, width, height);
+                Gdiplus::BitmapData bmpData;
+                if (bmp.LockBits(&rect, Gdiplus::ImageLockModeWrite, pf, &bmpData) == Gdiplus::Ok) {
+                    BYTE* srcPtr = pData + bih->biSize;
+                    BYTE* dstPtr = static_cast<BYTE*>(bmpData.Scan0);
+                    int srcStride = ((width * bpp + 31) / 32) * 4;
+                    for (int y = 0; y < height; y++) {
+                        memcpy(dstPtr + y * bmpData.Stride, srcPtr + y * srcStride, srcStride);
+                    }
+                    bmp.UnlockBits(&bmpData);
+
+                    IStream* stream = nullptr;
+                    if (CreateStreamOnHGlobal(nullptr, TRUE, &stream) == S_OK) {
+                        CLSID pngClsid;
+                        CLSIDFromString(L"{557CF406-1A04-11D3-9A73-0000F81EF32E}", &pngClsid);
+                        if (bmp.Save(stream, &pngClsid, nullptr) == Gdiplus::Ok) {
+                            STATSTG stat;
+                            stream->Stat(&stat, STATFLAG_NONAME);
+                            ULONG pngSize = static_cast<ULONG>(stat.cbSize.LowPart);
+
+                            LARGE_INTEGER zero = {};
+                            stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+
+                            std::vector<BYTE> pngData(pngSize);
+                            ULONG bytesRead = 0;
+                            stream->Read(pngData.data(), pngSize, &bytesRead);
+
+                            int b64Size = ((bytesRead + 2) / 3) * 4;
+                            result.resize(b64Size);
+                            const char* b64chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                            size_t ii = 0, jj = 0;
+                            while (ii < bytesRead) {
+                                unsigned char b0 = pngData[ii++];
+                                unsigned char b1 = (ii < bytesRead) ? pngData[ii++] : 0;
+                                unsigned char b2 = (ii < bytesRead) ? pngData[ii++] : 0;
+                                result[jj++] = b64chars[b0 >> 2];
+                                result[jj++] = b64chars[((b0 & 0x03) << 4) | (b1 >> 4)];
+                                result[jj++] = (ii - 1 < bytesRead) ? b64chars[((b1 & 0x0F) << 2) | (b2 >> 6)] : '=';
+                                result[jj++] = (ii < bytesRead) ? b64chars[b2 & 0x3F] : '=';
+                            }
+                        }
+                        stream->Release();
+                    }
+                }
             }
-            result = base64;
             GlobalUnlock(hData);
         }
     }
@@ -236,12 +303,96 @@ void ClipboardMonitor::SetClipboardTextInternal(const std::string& text) {
 }
 
 void ClipboardMonitor::SetClipboardImageInternal(const std::string& base64Data) {
-    // For V1, decoding base64 to bitmap and putting it on clipboard
-    // is complex. We'll store the base64 string for now and rely on the
-    // receiving device's ability to handle it via shared memory.
-    // A full implementation would use GDI+ to decode PNG and set CF_DIB.
-    
-    // Simplified: We'll use CF_TEXT to store a marker, and the actual
-    // image data flows through our WebSocket protocol, not native clipboard
-    SetClipboardTextInternal("[clipboard_sync_image]");
+    if (!gdiplusInitialized_) return;
+
+    std::vector<BYTE> pngBytes;
+    const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int inputLen = static_cast<int>(base64Data.length());
+    int i = 0;
+    while (i < inputLen) {
+        int a = chars.find(base64Data[i++]);
+        int b = (i < inputLen) ? chars.find(base64Data[i++]) : 0;
+        int c = (i < inputLen) ? chars.find(base64Data[i++]) : 0;
+        int d = (i < inputLen) ? chars.find(base64Data[i++]) : 0;
+        if (a == std::string::npos) a = 0;
+        if (b == std::string::npos) b = 0;
+        if (c == std::string::npos) c = 0;
+        if (d == std::string::npos) d = 0;
+        pngBytes.push_back(static_cast<BYTE>((a << 2) | (b >> 4)));
+        if (base64Data[i - 2] != '=') pngBytes.push_back(static_cast<BYTE>(((b & 0x0F) << 4) | (c >> 2)));
+        if (base64Data[i - 1] != '=') pngBytes.push_back(static_cast<BYTE>(((c & 0x03) << 6) | d));
+    }
+
+    HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, pngBytes.size());
+    if (!hMem) return;
+    void* pMem = GlobalLock(hMem);
+    memcpy(pMem, pngBytes.data(), pngBytes.size());
+    GlobalUnlock(hMem);
+
+    IStream* stream = nullptr;
+    if (CreateStreamOnHGlobal(hMem, TRUE, &stream) != S_OK) {
+        GlobalFree(hMem);
+        return;
+    }
+
+    Gdiplus::Bitmap* bmp = Gdiplus::Bitmap::FromStream(stream);
+    if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) {
+        delete bmp;
+        stream->Release();
+        return;
+    }
+
+    int width = bmp->GetWidth();
+    int height = bmp->GetHeight();
+
+    BITMAPINFOHEADER bih = {};
+    bih.biSize = sizeof(BITMAPINFOHEADER);
+    bih.biWidth = width;
+    bih.biHeight = -height;
+    bih.biPlanes = 1;
+    bih.biBitCount = 32;
+    bih.biCompression = BI_RGB;
+    int stride = ((width * 32 + 31) / 32) * 4;
+    int dibSize = sizeof(BITMAPINFOHEADER) + stride * height;
+
+    HGLOBAL hDib = GlobalAlloc(GMEM_MOVEABLE, dibSize);
+    if (!hDib) {
+        delete bmp;
+        stream->Release();
+        return;
+    }
+
+    auto* pDib = static_cast<BYTE*>(GlobalLock(hDib));
+    memcpy(pDib, &bih, sizeof(BITMAPINFOHEADER));
+
+    Gdiplus::BitmapData bmpData;
+    Gdiplus::Rect rect(0, 0, width, height);
+    if (bmp->LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bmpData) == Gdiplus::Ok) {
+        BYTE* src = static_cast<BYTE*>(bmpData.Scan0);
+        BYTE* dst = pDib + sizeof(BITMAPINFOHEADER);
+        for (int y = 0; y < height; y++) {
+            memcpy(dst + y * stride, src + y * bmpData.Stride, width * 4);
+        }
+        bmp->UnlockBits(&bmpData);
+    }
+    GlobalUnlock(hDib);
+
+    delete bmp;
+    stream->Release();
+
+    UINT pngFormat = RegisterClipboardFormatA("PNG");
+    if (OpenClipboard(hwnd_)) {
+        EmptyClipboard();
+        HGLOBAL hPng = GlobalAlloc(GMEM_MOVEABLE, pngBytes.size());
+        if (hPng) {
+            void* pPng = GlobalLock(hPng);
+            memcpy(pPng, pngBytes.data(), pngBytes.size());
+            GlobalUnlock(hPng);
+            SetClipboardData(pngFormat, hPng);
+        }
+        SetClipboardData(CF_DIB, hDib);
+        CloseClipboard();
+    } else {
+        GlobalFree(hDib);
+    }
 }

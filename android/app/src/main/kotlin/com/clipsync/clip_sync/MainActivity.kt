@@ -5,26 +5,30 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.util.Base64
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.clipsync/clipboard"
     private val EVENT_CHANNEL = "com.clipsync/clipboard/events"
-    
+
     private var clipboardManager: ClipboardManager? = null
     private var clipboardListener: ClipboardManager.OnPrimaryClipChangedListener? = null
     private var eventSink: EventChannel.EventSink? = null
+    private var lastClipboardText: String? = null
+    private var suppressNextEvent = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
 
-        // Method Channel for read/write
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -56,7 +60,6 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        // Event Channel for push-based clipboard changes
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
@@ -74,14 +77,23 @@ class MainActivity : FlutterActivity() {
 
         clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
             try {
+                if (suppressNextEvent) {
+                    suppressNextEvent = false
+                    return@OnPrimaryClipChangedListener
+                }
+
                 val clipData = clipboardManager?.primaryClip ?: return@OnPrimaryClipChangedListener
                 val item = clipData.getItemAt(0) ?: return@OnPrimaryClipChangedListener
 
                 if (item.text != null) {
-                    eventSink?.success(mapOf(
-                        "type" to "text",
-                        "data" to item.text.toString()
-                    ))
+                    val text = item.text.toString()
+                    if (text != lastClipboardText) {
+                        lastClipboardText = text
+                        eventSink?.success(mapOf(
+                            "type" to "text",
+                            "data" to text
+                        ))
+                    }
                 } else if (item.uri != null) {
                     try {
                         val bitmap = contentResolver.openInputStream(item.uri)?.use { stream ->
@@ -120,6 +132,8 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun writeToClipboard(text: String) {
+        lastClipboardText = text
+        suppressNextEvent = true
         val clipData = ClipData.newPlainText("clip_sync", text)
         clipboardManager?.setPrimaryClip(clipData)
     }
@@ -132,7 +146,7 @@ class MainActivity : FlutterActivity() {
         return try {
             val clipData = clipboardManager?.primaryClip ?: return null
             val item = clipData.getItemAt(0) ?: return null
-            
+
             if (item.uri != null) {
                 val bitmap = contentResolver.openInputStream(item.uri)?.use { stream ->
                     BitmapFactory.decodeStream(stream)
@@ -155,15 +169,23 @@ class MainActivity : FlutterActivity() {
     private fun writeImageToClipboard(base64Data: String) {
         try {
             val byteArray = Base64.decode(base64Data, Base64.NO_WRAP)
-            val bitmap = BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size)
-            if (bitmap != null) {
-                val stream = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-                val clipData = ClipData.newRawUri("clip_sync_image", 
-                    android.net.Uri.parse("content://clip_sync/image"))
-                clipboardManager?.setPrimaryClip(clipData)
-                bitmap.recycle()
+            val bitmap = BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size) ?: return
+
+            val cacheDir = File(cacheDir, "clipboard")
+            if (!cacheDir.exists()) cacheDir.mkdirs()
+
+            val imageFile = File(cacheDir, "clipboard_image.png")
+            imageFile.outputStream().use { output ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
             }
+            bitmap.recycle()
+
+            val authority = "${packageName}.fileprovider"
+            val contentUri: Uri = FileProvider.getUriForFile(this, authority, imageFile)
+
+            suppressNextEvent = true
+            val clipData = ClipData.newUri(contentResolver, "clip_sync_image", contentUri)
+            clipboardManager?.setPrimaryClip(clipData)
         } catch (e: Exception) {
             // Error writing image to clipboard
         }

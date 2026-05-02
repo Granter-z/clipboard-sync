@@ -14,7 +14,7 @@ set "PATH=%PATH%;D:\Visual Studio\VC\Tools\MSVC\14.50.35717\bin\Hostx64\x64"
 :: Add Flutter and Git
 set "PATH=%PATH%;D:\flutter\bin;C:\Program Files\Git\cmd"
 
-cd /d "C:\Users\Granter\Desktop\剪切板\clip_sync"
+cd /d "C:\Users\Granter\Desktop\Clipboard Sync\clip_sync"
 
 echo.
 echo Starting Flutter Windows build...

@@ -24,8 +24,8 @@ private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     HWND hwnd_;
-    HWND nextViewer_;
     bool isMonitoring_;
+    bool gdiplusInitialized_;
     std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel_;
 
     void OnClipboardChange();

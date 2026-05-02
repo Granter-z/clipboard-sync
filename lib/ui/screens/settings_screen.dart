@@ -116,7 +116,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         TextField(
                           controller: _relayController,
                           decoration: const InputDecoration(
-                            hintText: 'ws://服务器地址:9877',
+                            hintText: 'wss://your-app.up.railway.app',
                             border: OutlineInputBorder(),
                             prefixIcon: Icon(Icons.cloud),
                           ),
@@ -168,7 +168,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _aboutRow('版本', '1.0.0'),
                         _aboutRow('局域网模式', 'UDP广播 + WebSocket'),
                         _aboutRow('云端模式', 'WebSocket中继'),
-                        _aboutRow('端口', '9876 (局域网) / 9877 (中继)'),
+                        _aboutRow('端口', '9876 (局域网) / 443 (Railway)'),
                         _aboutRow('支持内容', '文字 + 图片'),
                       ],
                     ),
@@ -191,8 +191,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           '同一WiFi下自动发现，无需配置\n\n'
                           '【云端中继模式】\n'
                           '手机和电脑在不同网络也能用\n'
-                          '需要一台云服务器做中继\n'
-                          '见项目 server/ 目录的部署说明',
+                          '将 server/ 目录部署到 Railway 等平台\n'
+                          '在上方输入 wss:// 开头的地址即可连接',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             height: 1.6,
                           ),
