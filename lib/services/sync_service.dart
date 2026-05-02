@@ -17,8 +17,8 @@ class SyncService {
   final DiscoveryService _discoveryService = DiscoveryService();
   final WebSocketService _webSocketService = WebSocketService();
   final RelayService _relayService = RelayService();
-  late final ClipboardService _clipboardService;
-  late final Uuid _uuid;
+  late ClipboardService _clipboardService;
+  late Uuid _uuid;
 
   String? _deviceId;
   String? _deviceName;
@@ -65,6 +65,8 @@ class SyncService {
 
   Future<void> initialize() async {
     if (_isInitialized) return;
+    _isInitialized = true;
+
     _uuid = const Uuid();
     _clipboardService = ClipboardService();
 
@@ -106,8 +108,6 @@ class SyncService {
         _updateConnectionStatus(ConnectionStatus.connected);
       }
     });
-
-    _isInitialized = true;
   }
 
   Future<void> startSync() async {

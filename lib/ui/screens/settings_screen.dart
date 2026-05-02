@@ -215,12 +215,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
 
-    await widget.syncService.connectRelay(url);
-    setState(() => _isRelayConnected = true);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已连接中继服务器')),
-      );
+    try {
+      await widget.syncService.connectRelay(url);
+      if (mounted) {
+        setState(() => _isRelayConnected = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已连接中继服务器')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('连接失败: $e')),
+        );
+      }
     }
   }
 
